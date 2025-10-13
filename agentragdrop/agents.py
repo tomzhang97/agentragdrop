@@ -84,7 +84,7 @@ class ComposerAgent:
         return AgentResult({"answer": ans.strip(), "tokens_est": token_estimate(prompt + ans)})
 
 class RAGComposerAgent:
-    """Composer that can fetch missing context via retriever if evidence is empty."""
+    """Composer optimized for HotpotQA - produces concise, direct answers."""
     def __init__(self, retriever, llm):
         self.retriever = retriever
         self.llm = llm
@@ -95,10 +95,27 @@ class RAGComposerAgent:
             evidence = [d.page_content for d in docs]
 
         prompt = (
-            "You are the Composer. Use only the retrieved context. Cite with [#] indices of bullets you used.\n"
-            f"Question: {question}\n"
-            "Context:\n" + "\n".join(f"[{i+1}] {e[:500]}" for i, e in enumerate((evidence or [])[:5])) + "\n"
-            "Answer (1-2 sentences):"
+            "Answer the question using ONLY the context below. "
+            "Give a SHORT, DIRECT answer (1-5 words). "
+            "Do NOT write full sentences or explanations.\n\n"
+            f"Question: {question}\n\n"
+            "Context:\n" + "\n".join(f"{i+1}. {e[:300]}" for i, e in enumerate((evidence or [])[:5])) + "\n\n"
+            "Answer:"
         )
-        ans = self.llm.generate(prompt, max_new_tokens=160)
-        return AgentResult({"answer": ans.strip(), "tokens_est": token_estimate(prompt + ans)})
+        ans = self.llm.generate(prompt, max_new_tokens=32)  # Reduced from 160
+        
+        # Clean up the answer - remove citations, extra text
+        ans = ans.strip()
+        # Remove common prefixes
+        for prefix in ["Answer:", "A:", "The answer is", "It is"]:
+            if ans.lower().startswith(prefix.lower()):
+                ans = ans[len(prefix):].strip()
+        
+        # Remove citation markers like [1], [2], etc.
+        import re
+        ans = re.sub(r'\[\d+\]', '', ans).strip()
+        
+        # Take only first sentence/phrase if model generated too much
+        ans = ans.split('.')[0].split('\n')[0].strip()
+        
+        return {"answer": ans, "tokens_est": token_estimate(prompt + ans)}

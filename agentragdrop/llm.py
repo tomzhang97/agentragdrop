@@ -67,5 +67,5 @@ def get_llm(model_name: str = "/Qwen/Qwen3-1.7B", device: int = -1, **kw) -> Loc
 def get_langchain_llm(model_name: str = "Qwen/Qwen3-1.7B", device: int = -1, **kw):
     if HuggingFacePipeline is None:
         raise ImportError("langchain-huggingface is not installed. Install and retry.")
-    llm = LocalLLM(model_name=model_name, device=device, **kw)
+    llm = LocalLLM(model_name=model_name, device=device, **kw, max_new_tokens=48, temperature=0.1, do_sample=True, top_p=0.9)
     return HuggingFacePipeline(pipeline=llm._pipe)

@@ -7,6 +7,41 @@ from agentragdrop.llm import get_llm
 from tqdm import tqdm
 import re, string
 
+def clean_answer(ans: str) -> str:
+    """Clean and normalize answer for HotpotQA evaluation."""
+    ans = ans.strip()
+    
+    # Remove common prefixes
+    prefixes = [
+        "Answer:", "A:", "The answer is", "It is", "They are",
+        "According to the context", "Based on", "The", "Answer is"
+    ]
+    for prefix in prefixes:
+        if ans.lower().startswith(prefix.lower()):
+            ans = ans[len(prefix):].strip()
+            if ans.startswith(':'):
+                ans = ans[1:].strip()
+    
+    # Remove citation markers [1], [2], etc.
+    ans = re.sub(r'\[\d+\]', '', ans)
+    
+    # Remove quotes if wrapped
+    ans = ans.strip('"\'')
+    
+    # Take first sentence only
+    ans = ans.split('.')[0].split('\n')[0].strip()
+    
+    # Remove trailing punctuation except meaningful ones
+    while ans and ans[-1] in '.,;:!?':
+        ans = ans[:-1].strip()
+    
+    return ans
+
+# In your main() function, replace this line:
+# ans = (out.get("answer") or "").strip()
+
+# With this:
+
 def normalize_answer(s: str) -> str:
     s = s.strip()
     s = s.lower()
@@ -56,22 +91,65 @@ def flatten_sentences(context: List) -> List[Tuple[str, str, int]]:
                 out.append((title, s, i))
     return out
 
-def topk_supporting_sentences(q: str, sent_triples: List[Tuple[str,str,int]], embedder, k=4) -> List[Tuple[str,str,int]]:
+def topk_supporting_sentences(
+    q: str, 
+    sent_triples: List[Tuple[str,str,int]], 
+    embedder, 
+    k=6,  # Increase from 4
+    diversity_weight=0.3
+) -> List[Tuple[str,str,int]]:
     """
-    Scored by cosine similarity between question embedding and sentence embeddings.
+    Retrieve top-k sentences with diversity consideration.
     """
     if not sent_triples:
         return []
+    
     sents = [s for _, s, _ in sent_triples]
     q_vec = embedder.encode([q], normalize_embeddings=True)
     s_vec = embedder.encode(sents, normalize_embeddings=True)
-    sims = (s_vec @ q_vec.T).reshape(-1)  # cosine since normalized
-    idx = np.argsort(-sims)[:k]
-    return [sent_triples[i] for i in idx]
+    sims = (s_vec @ q_vec.T).reshape(-1)  # cosine similarity
+    
+    # Get more candidates than needed
+    top_n = min(k * 3, len(sent_triples))
+    candidate_idx = np.argsort(-sims)[:top_n]
+    
+    # Diversify by title - ensure we get sentences from different documents
+    selected = []
+    seen_titles = set()
+    
+    # First pass: get highest scoring sentence from each unique title
+    for idx in candidate_idx:
+        title, sent, sent_idx = sent_triples[idx]
+        if title not in seen_titles:
+            selected.append((idx, sims[idx]))
+            seen_titles.add(title)
+        if len(selected) >= k:
+            break
+    
+    # Second pass: fill remaining slots with high-scoring sentences
+    if len(selected) < k:
+        for idx in candidate_idx:
+            if idx not in [s[0] for s in selected]:
+                selected.append((idx, sims[idx]))
+            if len(selected) >= k:
+                break
+    
+    # Return in order of similarity score
+    selected.sort(key=lambda x: x[1], reverse=True)
+    return [sent_triples[idx] for idx, _ in selected[:k]]
+
 
 def build_evidence_texts(top_sent_triples: List[Tuple[str,str,int]]) -> List[str]:
-    # Compose "Title. sentence" strings for the ComposerAgent evidence
-    return [f"{t}. {s}" if t else s for (t, s, _) in top_sent_triples]
+    """Build evidence with better formatting."""
+    evidence = []
+    for t, s, _ in top_sent_triples:
+        # Truncate very long sentences but keep important info
+        s_clean = s.strip()[:250]  # Reduced from 500
+        if t:
+            evidence.append(f"{t}: {s_clean}")
+        else:
+            evidence.append(s_clean)
+    return evidence
 
 def to_sp(top_sent_triples: List[Tuple[str,str,int]], sp_k=2):
     # Supporting facts want a *small* set, typically 2 sentences total:
@@ -115,7 +193,8 @@ def main():
 
         # Compose final answer using your Composer (concise, evidence-bound)
         out = composer(question=q, evidence=evidence_texts)
-        ans = (out.get("answer") or "").strip()
+        raw_ans = (out.get("answer") or "").strip()
+        ans = clean_answer(raw_ans)
 
         # Supporting facts in required format (pick top sp_k)
         sp = to_sp(support, sp_k=args.sp_k)
