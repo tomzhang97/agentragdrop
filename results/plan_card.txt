@@ -1,0 +1,9 @@
+=== PLAN CARD ===
+Kept: ['retriever', 'validator', 'composer']
+Pruned: ['critic']
+
+Top Evidence:
+[1] Confidentiality clause: Parties agree not to disclose trade secrets. This clause is not directly related to GDPR compliance.
+
+Final Answer:
+[1] The confidentiality clause does not address GDPR compliance directly. [2] The GDPR requires that personal data must be protected in accordance with the principles of transparency, accuracy, and integrity. [3] [4] [5] [6] [7] [8] [9] [10] [11] [12] [13] [14] [15] [16] [17] [18] [19] [20] [21] [22] [23] [24] [25] [26] [27] [28] [29] [30] [31] [32] [33] [34] [

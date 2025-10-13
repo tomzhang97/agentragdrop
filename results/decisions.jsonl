@@ -1,0 +1,5 @@
+{"event": "exec", "node": "retriever", "latency_ms": 182.42069999996602}
+{"event": "exec", "node": "validator", "latency_ms": 999.7405999997682}
+{"event": "pruned", "node": "critic"}
+{"event": "exec", "node": "composer", "latency_ms": 5888.078699999824}
+{"event": "cache_stats", "cache_queries": 3, "cache_hits": 0, "cache_hit_rate": 0.0}
