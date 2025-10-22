@@ -1,7 +1,7 @@
-
 from .utils import token_estimate
 from .rag import make_retriever
 from typing import Optional, List, Dict, Any
+import re
 
 class AgentResult(dict):
     pass
@@ -24,7 +24,7 @@ class RetrieverAgent:
             hits.append(({"text": text}, score))
             evidence.append(text)
 
-        return {"hits": hits, "evidence": evidence, "tokens_est": 0} # Retrieval has no LLM token cost
+        return {"hits": hits, "evidence": evidence, "tokens_est": 0}
 
 class ValidatorAgent:
     def __init__(self, llm):
@@ -73,7 +73,7 @@ class ComposerAgent:
 
     def __call__(self, question, evidence: List[str], validator=None, critic=None):
         prompt = (
-            "You are the Composer. Use only the evidence. Return a SHORT PHRASE copied verbatim from the evidence when possible.Do NOT explain.\n"
+            "You are the Composer. Use only the evidence. Return a SHORT PHRASE copied verbatim from the evidence when possible. Do NOT explain.\n"
             f"Question: {question}\n"
             "Evidence:\n" + "\n".join(f"- {e[:400]}" for e in (evidence or [])[:4]) + "\n"
             f"Validator Verdict: {getattr(validator, 'verdict', 'N/A')}\n"
@@ -84,38 +84,79 @@ class ComposerAgent:
         return AgentResult({"answer": ans.strip(), "tokens_est": token_estimate(prompt + ans)})
 
 class RAGComposerAgent:
-    """Composer optimized for HotpotQA - produces concise, direct answers."""
+    """Composer with few-shot examples for HotpotQA."""
     def __init__(self, retriever, llm):
         self.retriever = retriever
         self.llm = llm
+        
+        # Few-shot examples showing the expected answer style
+        self.few_shot_examples = """Examples of good answers:
+
+Q: What government position was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?
+Context: 1. Shirley Temple held the position of U.S. Ambassador... 2. Kiss and Tell starred Shirley Temple as Corliss Archer...
+A: U.S. Ambassador
+
+Q: Were Scott Derrickson and Ed Wood of the same nationality?
+Context: 1. Scott Derrickson is an American filmmaker. 2. Ed Wood was an American filmmaker...
+A: yes
+
+Q: What year was the creator of Vampire: The Masquerade born?
+Context: 1. Mark Rein-Hagen created Vampire: The Masquerade. 2. Mark Rein-Hagen was born in 1964...
+A: 1964
+
+"""
 
     def __call__(self, question, evidence=None, **kwargs):
         if not evidence:
-            docs = self.retriever.get_relevant_documents(question)
-            evidence = [d.page_content for d in docs]
+            if self.retriever:
+                docs = self.retriever.get_relevant_documents(question)
+                evidence = [d.page_content for d in docs]
+            else:
+                evidence = []
 
         prompt = (
-            "Answer the question using ONLY the context below. "
-            "Give a SHORT, DIRECT answer (1-5 words). "
-            "Do NOT write full sentences or explanations.\n\n"
-            f"Question: {question}\n\n"
-            "Context:\n" + "\n".join(f"{i+1}. {e[:300]}" for i, e in enumerate((evidence or [])[:5])) + "\n\n"
-            "Answer:"
+            "You are answering questions using provided context. "
+            "Give ONLY the direct answer - a name, number, yes/no, or short phrase. "
+            "Do NOT write explanations or full sentences.\n\n"
+            + self.few_shot_examples +
+            "Now answer this question:\n\n"
+            f"Q: {question}\n"
+            "Context:\n" + "\n".join(f"{i+1}. {e[:250]}" for i, e in enumerate((evidence or [])[:6])) + "\n"
+            "A:"
         )
-        ans = self.llm.generate(prompt, max_new_tokens=32)  # Reduced from 160
         
-        # Clean up the answer - remove citations, extra text
+        ans = self.llm.generate(prompt, max_new_tokens=32)
+        ans = self._clean_answer(ans)
+        
+        return AgentResult({"answer": ans, "tokens_est": token_estimate(prompt + ans)})
+    
+    def _clean_answer(self, ans: str) -> str:
+        """Aggressive cleaning for HotpotQA format."""
         ans = ans.strip()
-        # Remove common prefixes
-        for prefix in ["Answer:", "A:", "The answer is", "It is"]:
-            if ans.lower().startswith(prefix.lower()):
-                ans = ans[len(prefix):].strip()
         
-        # Remove citation markers like [1], [2], etc.
-        import re
-        ans = re.sub(r'\[\d+\]', '', ans).strip()
+        # Remove citations and markdown
+        ans = re.sub(r'\[\d+\]', '', ans)
+        ans = re.sub(r'\*+', '', ans)
         
-        # Take only first sentence/phrase if model generated too much
-        ans = ans.split('.')[0].split('\n')[0].strip()
+        # Remove common prefixes (case insensitive)
+        prefixes = [
+            r'^Answer:\s*', r'^A:\s*', r'^The answer is:?\s*',
+            r'^Based on (the )?context,?\s*', r'^According to (the )?context,?\s*',
+            r'^It is\s*', r'^They are\s*', r'^The\s+'
+        ]
+        for prefix in prefixes:
+            ans = re.sub(prefix, '', ans, flags=re.IGNORECASE)
         
-        return {"answer": ans, "tokens_est": token_estimate(prompt + ans)}
+        # Take only first clause/sentence
+        ans = re.split(r'[.;,\n]', ans)[0].strip()
+        
+        # Remove quotes
+        ans = ans.strip('"\'')
+        
+        # Collapse whitespace
+        ans = re.sub(r'\s+', ' ', ans)
+        
+        # Remove trailing punctuation
+        ans = ans.rstrip('.,;:!?')
+        
+        return ans

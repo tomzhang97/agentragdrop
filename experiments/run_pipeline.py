@@ -32,7 +32,7 @@ def main():
     ap.add_argument("--pruner", default="heuristic", choices=["none", "heuristic", "random", "static", "greedy", "epsilon"])
     ap.add_argument("--utility-weights", type=parse_utility_weights, default="0.6,0.3,0.1", help="Alpha,beta,gamma for utility (e.g., '0.6,0.3,0.1')")
     ap.add_argument("--k", type=int, default=3)
-    ap.add_argument("--llm_model", default="Qwen/Qwen3-1.7B")
+    ap.add_argument("--llm_model", default="meta-llama/Meta-Llama-8B-Instruct")
     ap.add_argument("--embed_model", default="sentence-transformers/all-MiniLM-L6-v2")
     ap.add_argument("--device", type=int, default=-1, help="-1=cpu, 0=gpu0")
     ap.add_argument("--budget_tokens", type=int, default=0, help="0 => no token budget")

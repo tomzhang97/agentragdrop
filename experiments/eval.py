@@ -65,7 +65,7 @@ def main():
     ap.add_argument("--budget-sweep-tokens", default="0", help="Comma-separated token budgets (0=unlimited)")
     ap.add_argument("--budget-sweep-time-ms", default="0", help="Comma-separated time budgets in ms (0=unlimited)")
     ap.add_argument("--k", type=int, default=3)
-    ap.add_argument("--llm_model", default="Qwen/Qwen3-1.7B")
+    ap.add_argument("--llm_model", default="meta-llama/Meta-Llama-8B-Instruct")
     ap.add_argument("--embed_model", default="sentence-transformers/all-MiniLM-L6-v2")
     ap.add_argument("--device", type=int, default=-1)
     ap.add_argument("--out", default="results/pareto_data.csv")

@@ -17,7 +17,7 @@ def main():
     ap.add_argument("--n", type=int, default=100)
     ap.add_argument("--concurrency", type=int, default=8)
     ap.add_argument("--data", default="data/sample_docs.json")
-    ap.add_argument("--llm_model", default="Qwen/Qwen3-1.7B")
+    ap.add_argument("--llm_model", default="meta-llama/Meta-Llama-8B-Instruct")
     args = ap.parse_args()
 
     llm = get_llm(model_name=args.llm_model)

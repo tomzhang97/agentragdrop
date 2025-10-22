@@ -13,7 +13,7 @@ class LocalLLM:
     """Thin wrapper over HF causal LM (KISS)."""
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen3-1.7B",
+        model_name: str = "meta-llama/Meta-Llama-8B-Instruct",
         device: int = -1,
         max_new_tokens: int = 256,
         temperature: float = 0.2,
@@ -61,10 +61,10 @@ class LocalLLM:
             return out[len(prompt):].strip()
         return out.strip()
 
-def get_llm(model_name: str = "/Qwen/Qwen3-1.7B", device: int = -1, **kw) -> LocalLLM:
+def get_llm(model_name: str = "/meta-llama/Meta-Llama-8B-Instruct", device: int = -1, **kw) -> LocalLLM:
     return LocalLLM(model_name=model_name, device=device, **kw)
 
-def get_langchain_llm(model_name: str = "Qwen/Qwen3-1.7B", device: int = -1, **kw):
+def get_langchain_llm(model_name: str = "meta-llama/Meta-Llama-8B-Instruct", device: int = -1, **kw):
     if HuggingFacePipeline is None:
         raise ImportError("langchain-huggingface is not installed. Install and retry.")
     llm = LocalLLM(model_name=model_name, device=device, **kw, max_new_tokens=48, temperature=0.1, do_sample=True, top_p=0.9)
