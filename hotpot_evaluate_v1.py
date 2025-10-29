@@ -1,12 +1,12 @@
+# hotpot_evaluate_with_metrics.py
 import sys
-import ujson as json
+import json
+import os
 import re
 import string
 from collections import Counter
-import pickle
 
 def normalize_answer(s):
-
     def remove_articles(text):
         return re.sub(r'\b(a|an|the)\b', ' ', text)
 
@@ -21,7 +21,6 @@ def normalize_answer(s):
         return text.lower()
 
     return white_space_fix(remove_articles(remove_punc(lower(s))))
-
 
 def f1_score(prediction, ground_truth):
     normalized_prediction = normalize_answer(prediction)
@@ -44,7 +43,6 @@ def f1_score(prediction, ground_truth):
     recall = 1.0 * num_same / len(ground_truth_tokens)
     f1 = (2 * precision * recall) / (precision + recall)
     return f1, precision, recall
-
 
 def exact_match_score(prediction, ground_truth):
     return (normalize_answer(prediction) == normalize_answer(ground_truth))
@@ -86,18 +84,23 @@ def eval(prediction_file, gold_file):
     with open(gold_file) as f:
         gold = json.load(f)
 
-    metrics = {'em': 0, 'f1': 0, 'prec': 0, 'recall': 0,
+    metrics = {
+        'em': 0, 'f1': 0, 'prec': 0, 'recall': 0,
         'sp_em': 0, 'sp_f1': 0, 'sp_prec': 0, 'sp_recall': 0,
-        'joint_em': 0, 'joint_f1': 0, 'joint_prec': 0, 'joint_recall': 0}
+        'joint_em': 0, 'joint_f1': 0, 'joint_prec': 0, 'joint_recall': 0
+    }
+    
     for dp in gold:
         cur_id = dp['_id']
         can_eval_joint = True
+        
         if cur_id not in prediction['answer']:
             print('missing answer {}'.format(cur_id))
             can_eval_joint = False
         else:
             em, prec, recall = update_answer(
                 metrics, prediction['answer'][cur_id], dp['answer'])
+        
         if cur_id not in prediction['sp']:
             print('missing sp fact {}'.format(cur_id))
             can_eval_joint = False
@@ -123,8 +126,22 @@ def eval(prediction_file, gold_file):
     for k in metrics.keys():
         metrics[k] /= N
 
+    # Try to load performance metrics if available
+    metrics_file = prediction_file.replace(".json", "_metrics.json")
+    if os.path.exists(metrics_file):
+        with open(metrics_file) as f:
+            perf_metrics = json.load(f)
+            if 'aggregate' in perf_metrics:
+                metrics.update({
+                    'avg_latency_ms': perf_metrics['aggregate'].get('avg_latency_ms', 0),
+                    'avg_tokens': perf_metrics['aggregate'].get('avg_tokens_per_example', 0),
+                    'throughput_ex_per_sec': perf_metrics['aggregate'].get('throughput_examples_per_sec', 0),
+                    'total_latency_s': perf_metrics['aggregate'].get('total_latency_s', 0),
+                    'total_tokens': perf_metrics['aggregate'].get('total_tokens', 0)
+                })
+
     print(metrics)
+    return metrics
 
 if __name__ == '__main__':
     eval(sys.argv[1], sys.argv[2])
-

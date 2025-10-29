@@ -3,7 +3,8 @@ import os, hashlib
 from typing import List
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain.schema import Document
+# from langchain.schema import Document
+from langchain_core.documents import Document
 from .utils import load_json_or_jsonl
 
 def _vec_dir(data_path: str, embed_model: str) -> str:

@@ -2,6 +2,7 @@ from .utils import token_estimate
 from .rag import make_retriever
 from typing import Optional, List, Dict, Any
 import re
+import time
 
 class AgentResult(dict):
     pass
@@ -11,26 +12,51 @@ class RetrieverAgent:
         self.retriever = make_retriever(data_path, embed_model=embed_model, k=top_k)
         self.vs = self.retriever.vectorstore
         self.top_k = top_k
+        
+        # Metrics
+        self.total_calls = 0
+        self.total_latency = 0.0
 
     def __call__(self, question, k: Optional[int] = None) -> Dict[str, Any]:
+        t_start = time.perf_counter()
+        
         k = k or self.top_k
         results = self.vs.similarity_search_with_score(question, k=k)
 
         hits, evidence = [], []
-        # results: List[(Document, distance)], smaller distance is better
         for doc, dist in results:
-            score = 1.0 / (1.0 + float(dist)) # Convert distance to similarity score
+            score = 1.0 / (1.0 + float(dist))
             text = doc.page_content
             hits.append(({"text": text}, score))
             evidence.append(text)
+        
+        t_elapsed = time.perf_counter() - t_start
+        self.total_calls += 1
+        self.total_latency += t_elapsed
 
-        return {"hits": hits, "evidence": evidence, "tokens_est": 0}
+        return {
+            "hits": hits, 
+            "evidence": evidence, 
+            "tokens_est": 0,
+            "latency_ms": t_elapsed * 1000
+        }
+    
+    def get_metrics(self) -> dict:
+        return {
+            "total_calls": self.total_calls,
+            "total_latency_s": round(self.total_latency, 2),
+            "avg_latency_ms": round((self.total_latency / self.total_calls) * 1000, 2) if self.total_calls > 0 else 0
+        }
 
 class ValidatorAgent:
     def __init__(self, llm):
         self.llm = llm
+        self.total_calls = 0
+        self.total_latency = 0.0
 
     def __call__(self, question, evidence: List[str]):
+        t_start = time.perf_counter()
+        
         prompt = (
             "Answer only YES or NO.\n"
             f"Question: {question}\n"
@@ -38,23 +64,41 @@ class ValidatorAgent:
             "Is the evidence relevant to the question? Answer YES or NO:"
         )
         out = self.llm.generate(prompt, max_new_tokens=16)
-        return AgentResult({"verdict": out.strip(), "tokens_est": token_estimate(prompt + out)})
+        
+        t_elapsed = time.perf_counter() - t_start
+        self.total_calls += 1
+        self.total_latency += t_elapsed
+        
+        return AgentResult({
+            "verdict": out.strip(), 
+            "tokens_est": token_estimate(prompt + out),
+            "latency_ms": t_elapsed * 1000
+        })
+    
+    def get_metrics(self) -> dict:
+        return {
+            "total_calls": self.total_calls,
+            "total_latency_s": round(self.total_latency, 2),
+            "avg_latency_ms": round((self.total_latency / self.total_calls) * 1000, 2) if self.total_calls > 0 else 0
+        }
 
 class CriticAgent:
     def __init__(self, llm, threshold=0.2):
         self.llm = llm
         self.threshold = threshold
+        self.total_calls = 0
+        self.total_latency = 0.0
 
     def __call__(self, question, evidence: List[str]):
+        t_start = time.perf_counter()
+        
         notes = ""
-        # Rule-based check for very low overlap
         if evidence and len(evidence) >= 2:
             set1, set2 = set(evidence[0].split()), set(evidence[1].split())
             overlap = len(set1.intersection(set2)) / max(1, len(set1.union(set2)))
             if overlap < self.threshold:
                 notes = f"Inconsistent evidence (overlap={overlap:.2f})"
 
-        # LLM-based check if no rule triggered
         if not notes:
             prompt = (
                 "Critique if the provided evidence items conflict with each other. Be brief.\n"
@@ -64,14 +108,33 @@ class CriticAgent:
             tokens = token_estimate(prompt + notes)
         else:
             tokens = token_estimate(notes)
+        
+        t_elapsed = time.perf_counter() - t_start
+        self.total_calls += 1
+        self.total_latency += t_elapsed
 
-        return AgentResult({"notes": notes.strip(), "tokens_est": tokens})
+        return AgentResult({
+            "notes": notes.strip(), 
+            "tokens_est": tokens,
+            "latency_ms": t_elapsed * 1000
+        })
+    
+    def get_metrics(self) -> dict:
+        return {
+            "total_calls": self.total_calls,
+            "total_latency_s": round(self.total_latency, 2),
+            "avg_latency_ms": round((self.total_latency / self.total_calls) * 1000, 2) if self.total_calls > 0 else 0
+        }
 
 class ComposerAgent:
     def __init__(self, llm):
         self.llm = llm
+        self.total_calls = 0
+        self.total_latency = 0.0
 
     def __call__(self, question, evidence: List[str], validator=None, critic=None):
+        t_start = time.perf_counter()
+        
         prompt = (
             "You are the Composer. Use only the evidence. Return a SHORT PHRASE copied verbatim from the evidence when possible. Do NOT explain.\n"
             f"Question: {question}\n"
@@ -81,15 +144,32 @@ class ComposerAgent:
             "Answer:"
         )
         ans = self.llm.generate(prompt, max_new_tokens=128)
-        return AgentResult({"answer": ans.strip(), "tokens_est": token_estimate(prompt + ans)})
+        
+        t_elapsed = time.perf_counter() - t_start
+        self.total_calls += 1
+        self.total_latency += t_elapsed
+        
+        return AgentResult({
+            "answer": ans.strip(), 
+            "tokens_est": token_estimate(prompt + ans),
+            "latency_ms": t_elapsed * 1000
+        })
+    
+    def get_metrics(self) -> dict:
+        return {
+            "total_calls": self.total_calls,
+            "total_latency_s": round(self.total_latency, 2),
+            "avg_latency_ms": round((self.total_latency / self.total_calls) * 1000, 2) if self.total_calls > 0 else 0
+        }
 
 class RAGComposerAgent:
     """Composer with few-shot examples for HotpotQA."""
     def __init__(self, retriever, llm):
         self.retriever = retriever
         self.llm = llm
+        self.total_calls = 0
+        self.total_latency = 0.0
         
-        # Few-shot examples showing the expected answer style
         self.few_shot_examples = """Examples of good answers:
 
 Q: What government position was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?
@@ -107,6 +187,8 @@ A: 1964
 """
 
     def __call__(self, question, evidence=None, **kwargs):
+        t_start = time.perf_counter()
+        
         if not evidence:
             if self.retriever:
                 docs = self.retriever.get_relevant_documents(question)
@@ -128,17 +210,23 @@ A: 1964
         ans = self.llm.generate(prompt, max_new_tokens=32)
         ans = self._clean_answer(ans)
         
-        return AgentResult({"answer": ans, "tokens_est": token_estimate(prompt + ans)})
+        t_elapsed = time.perf_counter() - t_start
+        self.total_calls += 1
+        self.total_latency += t_elapsed
+        
+        return AgentResult({
+            "answer": ans, 
+            "tokens_est": token_estimate(prompt + ans),
+            "latency_ms": t_elapsed * 1000
+        })
     
     def _clean_answer(self, ans: str) -> str:
         """Aggressive cleaning for HotpotQA format."""
         ans = ans.strip()
         
-        # Remove citations and markdown
         ans = re.sub(r'\[\d+\]', '', ans)
         ans = re.sub(r'\*+', '', ans)
         
-        # Remove common prefixes (case insensitive)
         prefixes = [
             r'^Answer:\s*', r'^A:\s*', r'^The answer is:?\s*',
             r'^Based on (the )?context,?\s*', r'^According to (the )?context,?\s*',
@@ -147,16 +235,16 @@ A: 1964
         for prefix in prefixes:
             ans = re.sub(prefix, '', ans, flags=re.IGNORECASE)
         
-        # Take only first clause/sentence
         ans = re.split(r'[.;,\n]', ans)[0].strip()
-        
-        # Remove quotes
         ans = ans.strip('"\'')
-        
-        # Collapse whitespace
         ans = re.sub(r'\s+', ' ', ans)
-        
-        # Remove trailing punctuation
         ans = ans.rstrip('.,;:!?')
         
         return ans
+    
+    def get_metrics(self) -> dict:
+        return {
+            "total_calls": self.total_calls,
+            "total_latency_s": round(self.total_latency, 2),
+            "avg_latency_ms": round((self.total_latency / self.total_calls) * 1000, 2) if self.total_calls > 0 else 0
+        }

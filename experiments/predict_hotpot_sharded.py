@@ -1,31 +1,33 @@
 import os, json, argparse, math, pathlib, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# Import central configuration
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import config
+
 def load_json(p):
     with open(p, encoding="utf-8") as f:
         return json.load(f)
 
-def run_shard(shard_dev, shard_out, gpu_id, evidence_k, sp_k, llm_model):
+def run_shard(shard_dev, shard_out, gpu_id, evidence_k, sp_k):
     """Run one shard on one GPU and log stderr/stdout to a file."""
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-    env["PYTHONPATH"] = env.get("PYTHONPATH", os.getcwd())  # <-- ensure package imports
+    env["PYTHONPATH"] = env.get("PYTHONPATH", os.getcwd())
 
-    # Log file per shard
     log_path = shard_out + ".log"
     cmd = [
         sys.executable, "experiments/hotpot_dev_predict_distractor.py",
         "--dev_json", shard_dev,
         "--out_pred", shard_out,
-        "--device", "0",                     # inside the child only GPU 0 is visible
+        "--device", "0",  # Inside child, only GPU 0 is visible
         "--evidence_k", str(evidence_k),
         "--sp_k", str(sp_k),
-        "--llm_model", llm_model,
+        # NO --llm_model arg - uses config.py
     ]
     with open(log_path, "w", encoding="utf-8") as lf:
         lf.write("CMD: " + " ".join(cmd) + "\n")
         lf.flush()
-        # Capture output so failures are debuggable
         proc = subprocess.Popen(cmd, env=env, stdout=lf, stderr=lf)
         rc = proc.wait()
         if rc != 0:
@@ -36,13 +38,28 @@ def main():
     ap.add_argument("--dev_json", required=True)
     ap.add_argument("--out_pred", required=True)
     ap.add_argument("--shard_size", type=int, default=1000)
-    ap.add_argument("--evidence_k", type=int, default=8)
-    ap.add_argument("--sp_k", type=int, default=2)
-    ap.add_argument("--llm_model", default="meta-llama/Meta-Llama-8B-Instruct")  # <-- default to Instruct
-    ap.add_argument("--gpus", default="0,1,2,3", help="comma-separated GPU ids to use")
+    ap.add_argument("--evidence_k", type=int, default=None, help="Override config")
+    ap.add_argument("--sp_k", type=int, default=None, help="Override config")
+    # REMOVED --llm_model argument - use config.py only
+    ap.add_argument("--gpus", default="0,1,2,3", help="comma-separated GPU ids")
     ap.add_argument("--concurrency", type=int, default=4)
     ap.add_argument("--resume", action="store_true")
     args = ap.parse_args()
+
+    # Use config defaults (NO llm_model override)
+    llm_model = config.LLM_MODEL  # Always use config
+    evidence_k = args.evidence_k if args.evidence_k is not None else config.HOTPOT_EVIDENCE_K
+    sp_k = args.sp_k if args.sp_k is not None else config.HOTPOT_SP_K
+
+    print("="*70)
+    print("HOTPOT QA SHARDED PREDICTION")
+    print("="*70)
+    print(f"Model: {llm_model}")
+    print(f"Evidence K: {evidence_k}, SP K: {sp_k}")
+    print(f"Shard size: {args.shard_size}")
+    print(f"GPUs: {args.gpus}")
+    print(f"Concurrency: {args.concurrency}")
+    print("="*70 + "\n")
 
     data = load_json(args.dev_json)
     N = len(data)
@@ -75,11 +92,12 @@ def main():
                 continue
             gpu = gpu_ids[idx % len(gpu_ids)]
             print(f"[launch] shard {s+1}/{shards} {lo}:{hi} on GPU {gpu}")
+            # Pass exactly 5 arguments to run_shard
             futures.append(pool.submit(
-                run_shard, shard_dev, shard_out, gpu, args.evidence_k, args.sp_k, args.llm_model
+                run_shard, shard_dev, shard_out, gpu, evidence_k, sp_k
             ))
         for fut in as_completed(futures):
-            fut.result()   # will surface errors; check the .log next to the shard
+            fut.result()
 
     # Merge
     merged = {"answer": {}, "sp": {}}
@@ -101,7 +119,14 @@ def main():
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(merged, f, ensure_ascii=False)
-    print("Wrote merged predictions to:", out_path)
+    
+    print("\n" + "="*70)
+    print("SHARDED PREDICTION COMPLETE")
+    print("="*70)
+    print(f"Output: {out_path}")
+    print(f"Total examples: {N}")
+    print(f"Shards: {shards}")
+    print("="*70)
 
 if __name__ == "__main__":
     main()

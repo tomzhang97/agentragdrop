@@ -5,22 +5,25 @@ import os
 import sys
 from datetime import datetime
 
-# Configuration
-DEV_JSON = "runs/hotpot_dev_distractor_200.json"
+# Import central configuration
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import config
+
+# Configuration from central config
+DEV_JSON = config.HOTPOT_DEV_JSON
 EVAL_SCRIPT = "hotpot_evaluate_v1.py"
-LIMIT = 200  # Number of examples to test
-DEVICE = 0   # GPU device (-1 for CPU)
-LLM_MODEL = "meta-llama/Meta-Llama-8B-Instruct" 
+LIMIT = 200
+DEVICE = config.DEFAULT_DEVICE
+LLM_MODEL = config.LLM_MODEL
 
 # Hyperparameter grid
 configs = [
-    # (evidence_k, sp_k, description)
     (6, 2, "baseline"),
     (8, 2, "more_evidence"),
     (6, 3, "more_sp"),
     (8, 3, "both_increased"),
     (10, 2, "max_evidence"),
-    (4, 2, "minimal"),  # Compare against fewer evidence
+    (4, 2, "minimal"),
 ]
 
 def run_prediction(evidence_k, sp_k, run_id):
@@ -32,7 +35,6 @@ def run_prediction(evidence_k, sp_k, run_id):
         "python", "experiments/hotpot_dev_predict_distractor.py",
         "--dev_json", DEV_JSON,
         "--out_pred", pred_file,
-        "--llm_model", LLM_MODEL,
         "--evidence_k", str(evidence_k),
         "--sp_k", str(sp_k),
         "--limit", str(LIMIT),
@@ -53,7 +55,6 @@ def evaluate_predictions(pred_file):
     
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        # Parse the output (it's a dict printed as string)
         metrics = eval(result.stdout.strip())
         return metrics
     except subprocess.CalledProcessError as e:
@@ -84,26 +85,33 @@ def main():
         print(f"  evidence_k={evidence_k}, sp_k={sp_k}")
         print("-" * 70)
         
-        # Run prediction
         pred_file = run_prediction(evidence_k, sp_k, run_id)
         if not pred_file:
             print(f"  ❌ Prediction failed, skipping...")
             continue
         
-        # Evaluate
         metrics = evaluate_predictions(pred_file)
         if not metrics:
             print(f"  ❌ Evaluation failed, skipping...")
             continue
         
-        # Display results
         em = metrics.get('em', 0)
         f1 = metrics.get('f1', 0)
         joint_f1 = metrics.get('joint_f1', 0)
         
-        print(f"  ✓ EM: {em:.3f} | F1: {f1:.3f} | Joint F1: {joint_f1:.3f}")
+        # Load performance metrics if available
+        metrics_file = pred_file.replace(".json", "_metrics.json")
+        if os.path.exists(metrics_file):
+            with open(metrics_file) as mf:
+                perf = json.load(mf)
+                if 'aggregate' in perf:
+                    metrics['avg_latency_ms'] = perf['aggregate'].get('avg_latency_ms', 0)
+                    metrics['avg_tokens'] = perf['aggregate'].get('avg_tokens_per_example', 0)
         
-        # Track results
+        print(f"  ✓ EM: {em:.3f} | F1: {f1:.3f} | Joint F1: {joint_f1:.3f}")
+        if 'avg_latency_ms' in metrics:
+            print(f"    Latency: {metrics['avg_latency_ms']:.1f}ms | Tokens: {metrics['avg_tokens']:.1f}")
+        
         result_entry = {
             'evidence_k': evidence_k,
             'sp_k': sp_k,
@@ -112,14 +120,12 @@ def main():
         }
         results.append(result_entry)
         
-        # Update best
         if f1 > best_f1:
             best_f1 = f1
             best_config = (evidence_k, sp_k, desc)
             best_metrics = metrics
             print(f"  🌟 New best F1!")
     
-    # Summary
     print("\n" + "="*70)
     print("TUNING COMPLETE")
     print("="*70)
@@ -135,6 +141,9 @@ def main():
         print(f"  Joint EM: {best_metrics['joint_em']:.3f}")
         print(f"  Joint F1: {best_metrics['joint_f1']:.3f}")
         print(f"  SP F1: {best_metrics['sp_f1']:.3f}")
+        if 'avg_latency_ms' in best_metrics:
+            print(f"  Avg Latency: {best_metrics['avg_latency_ms']:.1f}ms")
+            print(f"  Avg Tokens: {best_metrics['avg_tokens']:.1f}")
     
     # Save all results
     results_file = f"results/tuning_{run_id}.json"
@@ -153,17 +162,19 @@ def main():
     
     print(f"\n💾 Full results saved to: {results_file}")
     
-    # Print comparison table
-    print("\n" + "="*70)
-    print("COMPARISON TABLE")
-    print("="*70)
-    print(f"{'Config':<20} {'EM':<8} {'F1':<8} {'Joint F1':<10} {'SP F1':<8}")
-    print("-" * 70)
+    # Print comparison table with cost metrics
+    print("\n" + "="*100)
+    print("COMPARISON TABLE (Quality vs Cost)")
+    print("="*100)
+    print(f"{'Config':<15} {'EM':<8} {'F1':<8} {'Joint F1':<10} {'SP F1':<8} {'Latency':<12} {'Tokens':<10}")
+    print("-" * 100)
     for r in sorted(results, key=lambda x: x['f1'], reverse=True):
         config_str = f"e={r['evidence_k']},sp={r['sp_k']}"
-        print(f"{config_str:<20} {r['em']:<8.3f} {r['f1']:<8.3f} {r['joint_f1']:<10.3f} {r['sp_f1']:<8.3f}")
+        latency_str = f"{r.get('avg_latency_ms', 0):.1f}ms" if 'avg_latency_ms' in r else "N/A"
+        tokens_str = f"{r.get('avg_tokens', 0):.0f}" if 'avg_tokens' in r else "N/A"
+        print(f"{config_str:<15} {r['em']:<8.3f} {r['f1']:<8.3f} {r['joint_f1']:<10.3f} {r['sp_f1']:<8.3f} {latency_str:<12} {tokens_str:<10}")
     
-    print("="*70)
+    print("="*100)
 
 if __name__ == "__main__":
     main()
