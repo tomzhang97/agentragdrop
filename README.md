@@ -28,7 +28,7 @@ pip install -r requirements.txt
 Run sharded prediction with parallel GPUs:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 python experiments/predict_hotpot_sharded.py   --dev_json data/hotpot_dev_distractor_v1.json   --out_pred runs/pred_hotpot.json   --shard_size 1000   --gpus 0,1,2,3   --concurrency 4   --evidence_k 8   --sp_k 2
+CUDA_VISIBLE_DEVICES=0,1,2,3 python experiments/predict_hotpot_sharded.py   --dev_json hotpotQA/hotpot_dev_distractor_v1.json   --out_pred runs/pred_hotpot.json   --shard_size 1000   --gpus 0,1,2,3   --concurrency 4   --evidence_k 8   --sp_k 2
 ```
 
 This produces per-shard files under `runs/_shards/`:
